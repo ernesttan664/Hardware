@@ -431,7 +431,7 @@ void serialEvent(){
     if(inChar == 's'){
       explorationMode = false;
     }
-    else if(inChar != 's'){  // s indicate start of shortest path run, sensor readings will not be computed 
+    else if(inChar != 's'){  // s indicate start of shortest path run, sensor readings will not be sent 
       commandBuffer += inChar;
     }
   }
