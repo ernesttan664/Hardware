@@ -428,10 +428,10 @@ void serialEvent(){
   // get data from serial buffer
   while(Serial.available()){
     char inChar = (char)Serial.read();
-    if(inChar == 's'){
+    if(inChar == 's'){ // s indicate start of shortest path run, sensor readings will not be sent
       explorationMode = false;
     }
-    else if(inChar != 's'){  // s indicate start of shortest path run, sensor readings will not be sent 
+    else if(inChar != 's'){   
       commandBuffer += inChar;
     }
   }
