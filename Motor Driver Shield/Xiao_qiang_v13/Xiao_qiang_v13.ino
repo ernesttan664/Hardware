@@ -75,7 +75,7 @@ void setup() {
 
 void loop(){
   switch(command){
-    case 0:  // idle state, send readings once and check if there is next command
+    case 0:  // idle state, send readings once and check if the robot can auto-reposition itself
       if(sendSensorReading){
         obstacleIdentification();
         sendSensorReading = false;
