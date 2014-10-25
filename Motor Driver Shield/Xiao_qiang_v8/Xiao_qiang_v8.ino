@@ -8,12 +8,10 @@
     Whenever a command finishes execution, sensor data is relayed back at the end of each movement command
   
   At software lab 3 arena, speed = 500, interval = 100
-  m2_P = 1.1, m2_I = 0.0001, m2_D = 0.001;
+  m2_P = 1.08, m2_I = 0.0001, m2_D = 0.001;
   m1_P = 1.06, m1_I = 0.0001, m1_D = 0.001;
   
-  need to reduce amount of positioning, can try to reposition every 2 to 3 moves
-  priority: reduce sensor cooldown time
-
+  need to calibrate all rotation command and also move 2,3 and 10 grids have been disabled.
 */
 #include <PinChangeInt.h>
 #include <PID_v1.h>
@@ -35,26 +33,26 @@ unsigned long _2_grid_movement_duration = 900;
 unsigned long _3_grid_movement_duration = 1250;
 unsigned long _10_grid_movement_duration = 4200;
 int command=0, sonarDist=0, avgCount=0;
-double m2DC = 0.0, m1DC = 0.0,m1Count=0.0, m2Count=0.0, m1SpeedAdjustment, m2SpeedAdjustment, targetSpeed = 0.0; // note: adjust target speed at the case statements
-volatile int m2MovementCount=0, m1MovementCount=0;
+double m1_PID_input=0.0, m2_PID_input=0.0, m2DC = 0.0, m1DC = 0.0, m1SpeedAdjustment, m2SpeedAdjustment, targetSpeed = 0.0; // note: adjust target speed at the case statements
+volatile int m2MovementCount=0, m1MovementCount=0, m2Ticks=0, m1Ticks=0;
 double m2_P = 1.1, m2_I = 0.0001, m2_D = 0.001;
-double m1_P = 1.05, m1_I = 0.0001, m1_D = 0.001;
-String commandBuffer = "111115111114"; // 71277776377627
-boolean sendSensorReading=true, explorationMode=true;
+double m1_P = 1.06, m1_I = 0.0001, m1_D = 0.001;
+String commandBuffer = ""; // 71277776377627
+boolean sendSensorReading=false, explorationMode=true;
 int leftSideSensor[samples], leftDiagSensor[samples], rightSideSensor[samples], rightDiagSensor[samples], adjustmentSensor[samples];
 int leftSideSensorMedian=0, leftDiagSensorMedian=0, rightDiagSensorMedian=0, rightSideSensorMedian=0, adjustmentSensorMedian=0;
 int obstaclePositions[6];
 
 //Specify the links and initial tuning parameters
-PID leftPID(&m2Count, &m2SpeedAdjustment, &targetSpeed, m2_P, m2_I , m2_D, DIRECT);
-PID rightPID(&m1Count, &m1SpeedAdjustment, &targetSpeed, m1_P, m1_I, m1_D, DIRECT);
+PID leftPID(&m2_PID_input, &m2SpeedAdjustment, &targetSpeed, m2_P, m2_I , m2_D, DIRECT);
+PID rightPID(&m1_PID_input, &m1SpeedAdjustment, &targetSpeed, m1_P, m1_I, m1_D, DIRECT);
 
 
 void setup() {
   // setting String buffer size 
   commandBuffer.reserve(200);
   
-  //tell the PID to range between -88 and 800
+  //tell the PID to range between -800 and 800
   leftPID.SetOutputLimits(-800,800);
   rightPID.SetOutputLimits(-800,800);
   
@@ -63,15 +61,12 @@ void setup() {
   rightPID.SetMode(AUTOMATIC);
   
   // setup pin interrupts
-  PCintPort::attachInterrupt(PIN3, &compute_m2_count, RISING);
-  PCintPort::attachInterrupt(PIN5, &compute_m1_count, RISING);
-  Serial.begin(115200); // set the baud rate
+  PCintPort::attachInterrupt(PIN3, &compute_m2_ticks, RISING);
+  PCintPort::attachInterrupt(PIN5, &compute_m1_ticks, RISING);
+  Serial.begin(9600); // set the baud rate
   
   // Establishing Communications
   while(!Serial);
-  
-  // waiting for ASCII 0 to be sent from pc to indicate start of exploration
-  //while(Serial.available()<1){}
 }
 
 void loop(){
@@ -85,13 +80,21 @@ void loop(){
         // if obstacle position is x1x1x, reposition robot
         if(obstaclePositions[1]==1 && obstaclePositions[3]==1){
           repositionRobotFront();
+          if(obstaclePositions[2]==1){
+            //if robot is too close to the wall, back away from the wall
+            backAwayFromWall();
+            repositionRobotFront();
+          }
         }
         // if side of the robot is next to a wall
         if(obstaclePositions[4]==1 && obstaclePositions[5]==1){
           repositionRobotSide();
         }
       }
+      
       // check for next command
+      if(commandBuffer[0] == '0')
+        sendSensorReading = true;
       if(commandBuffer.length() > 1){
         command = commandBuffer.charAt(0)-48;
         commandBuffer = commandBuffer.substring(1);
@@ -101,7 +104,7 @@ void loop(){
         commandBuffer = "";
       }
       else command = 0;
-      delay(100);
+      
     break;
     
     case 1: // move 1 grid
@@ -111,14 +114,18 @@ void loop(){
       digitalWrite(m1INA, LOW);
       digitalWrite(m2INA, LOW);
       
-      targetSpeed = 500;
-      for(m2MovementCount=0; m2MovementCount<160;)
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<220;){
         moveForward();
-      targetSpeed = 200;
-      for(m2MovementCount=0; m2MovementCount<95;)
-        moveForward();
-      analogWrite(m2PWM, 0*255);
-      analogWrite(m1PWM, 0*255);
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
       command = 0;
       sendSensorReading = true;
     break;
@@ -153,13 +160,21 @@ void loop(){
       digitalWrite(m2INB, HIGH);
       digitalWrite(m1INA, LOW);
       digitalWrite(m2INA, LOW);
-      targetSpeed = 500;
-      for(unsigned long movement_start_time = millis(); (millis() - movement_start_time)<_2_grid_movement_duration;)
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<500;){
         moveForward();
-      analogWrite(m2PWM, 0*255);
-      analogWrite(m1PWM, 0*255);
-      sendSensorReading = true;
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
       command = 0;
+      sendSensorReading = true;
     break;
     
     case 7: // move 3 grid
@@ -168,29 +183,182 @@ void loop(){
       digitalWrite(m2INB, HIGH);
       digitalWrite(m1INA, LOW);
       digitalWrite(m2INA, LOW);
-      targetSpeed = 500;
       
-      for(unsigned long movement_start_time = millis(); (millis() - movement_start_time)<_3_grid_movement_duration;)
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<780;){
         moveForward();
-      analogWrite(m2PWM, 0*255);
-      analogWrite(m1PWM, 0*255);
-      sendSensorReading = true;
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
       command = 0;
+      sendSensorReading = true;
     break;
     
-    case 8: // move 10 grid
-    // Setting wheels to move robot forward
+    case 8: // move 4 grid
+      // Setting wheels to move robot forward
       digitalWrite(m1INB, HIGH);
       digitalWrite(m2INB, HIGH);
       digitalWrite(m1INA, LOW);
       digitalWrite(m2INA, LOW);
-      targetSpeed = 500;
-      for(unsigned long movement_start_time = millis(); (millis() - movement_start_time)<_10_grid_movement_duration;)
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<1080;){
         moveForward();
-      analogWrite(m1PWM, 0*255);
-      analogWrite(m2PWM, 0*255);
-      sendSensorReading = true;
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
       command = 0;
+      sendSensorReading = true;
+    break;
+    
+    case 9: // move 5 grid
+      // Setting wheels to move robot forward
+      digitalWrite(m1INB, HIGH);
+      digitalWrite(m2INB, HIGH);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<1380;){
+        moveForward();
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
+      command = 0;
+      sendSensorReading = true;
+    break;
+    
+    case 10: // move 6 grid
+      // Setting wheels to move robot forward
+      digitalWrite(m1INB, HIGH);
+      digitalWrite(m2INB, HIGH);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<1680;){
+        moveForward();
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
+      command = 0;
+      sendSensorReading = true;
+    break;
+    
+    case 11: // move 7 grid
+      // Setting wheels to move robot forward
+      digitalWrite(m1INB, HIGH);
+      digitalWrite(m2INB, HIGH);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<2000;){
+        moveForward();
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
+      command = 0;
+      sendSensorReading = true;
+    break;
+    
+    case 12: // move 8 grid
+      // Setting wheels to move robot forward
+      digitalWrite(m1INB, HIGH);
+      digitalWrite(m2INB, HIGH);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<2320;){
+        moveForward();
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
+      command = 0;
+      sendSensorReading = true;
+    break;
+    
+    case 13: // move 8 grid
+      // Setting wheels to move robot forward
+      digitalWrite(m1INB, HIGH);
+      digitalWrite(m2INB, HIGH);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<2640;){
+        moveForward();
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
+      command = 0;
+      sendSensorReading = true;
+    break;
+    
+    case 14: // move 8 grid
+      // Setting wheels to move robot forward
+      digitalWrite(m1INB, HIGH);
+      digitalWrite(m2INB, HIGH);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      
+      targetSpeed = 600;
+      for(m2MovementCount=0, m1MovementCount=0, m1Ticks=0, m2Ticks=0, avgCount=0; avgCount<2920;){
+        moveForward();
+        avgCount = (m2MovementCount+m1MovementCount)/2;
+      }
+      // Setting wheels to brake
+      digitalWrite(m1INB, LOW);
+      digitalWrite(m2INB, LOW);
+      digitalWrite(m1INA, LOW);
+      digitalWrite(m2INA, LOW);
+      analogWrite(m2PWM, 0.5*255);
+      analogWrite(m1PWM, 0.5*255);
+      command = 0;
+      sendSensorReading = true;
     break;
     
     case 17: // realign robot centre to be within grid, command = "A"
@@ -297,7 +465,8 @@ void obstacleIdentification(){
   Serial.print(obstaclePositions[1]);
   Serial.print(obstaclePositions[2]);
   Serial.print(obstaclePositions[3]);
-  Serial.println(obstaclePositions[4]);
+  Serial.print(obstaclePositions[4]);
+  Serial.println(obstaclePositions[5]);
 }
 
 int leftSideSensorReading(){
@@ -388,29 +557,33 @@ void moveForward(){
   unsigned long current_ms = millis();
   
   if((current_ms - prev_ms) > interval){
-    
+    m2_PID_input = m2Ticks;
+    m1_PID_input = m1Ticks;
     leftPID.Compute();
     rightPID.Compute();
-    m2DC = (m2Count+m2SpeedAdjustment)/1290;
-    m1DC = (m1Count+m1SpeedAdjustment)/1230;
+    m2DC = (m2_PID_input+m2SpeedAdjustment)/1290;
+    m1DC = (m1_PID_input+m1SpeedAdjustment)/1230;
     
-    m2Count = 0;
-    m1Count = 0;
+    m2Ticks = 0;
+    m1Ticks = 0;
     prev_ms = current_ms;
   }
 }
 
-void compute_m2_count(){
-  m2Count++;
+void compute_m2_ticks(){
+  m2Ticks++;
   m2MovementCount++;
 }
 
-void compute_m1_count(){
-  m1Count++;
+void compute_m1_ticks(){
+  m1Ticks++;
+  m1MovementCount++;
 }
 
 void rotateLeft90(){
-  m2Count=0;
+  m2MovementCount=0;
+  m1MovementCount=0;
+  avgCount=0;
   /// setting wheel direction to rotate robot left
   digitalWrite(m1INB, HIGH);
   digitalWrite(m2INB, LOW);
@@ -422,16 +595,17 @@ void rotateLeft90(){
   delay(300);
   analogWrite(m2PWM,0.2*255);
   analogWrite(m1PWM,0.2*255);
-  while(m2Count<440){
-    delay(1);
+  while(avgCount<412){
+    avgCount = (m2MovementCount+m1MovementCount)/2;
   }
   analogWrite(m2PWM, 0*255);
   analogWrite(m1PWM, 0*255);
-  m2Count=0;
 }
 
 void rotateLeft180(){
-  m2Count=0;
+  m2MovementCount=0;
+  m1MovementCount=0;
+  avgCount=0;
   /// setting wheel direction to rotate robot left
   digitalWrite(m1INB, HIGH);
   digitalWrite(m2INB, LOW);
@@ -443,16 +617,17 @@ void rotateLeft180(){
   delay(900);
   analogWrite(m2PWM,0.2*255);
   analogWrite(m1PWM,0.2*255);
-  while(m2Count<890){
-    delay(1);
+  while(avgCount<839){
+    avgCount = (m2MovementCount+m1MovementCount)/2;
   }
   analogWrite(m2PWM, 0*255);
   analogWrite(m1PWM, 0*255);
-  m2Count=0;
 }
 
 void rotateRight180(){
-  m2Count=0;
+  m2MovementCount=0;
+  m1MovementCount=0;
+  avgCount=0;
   /// setting wheel direction to rotate robot left
   digitalWrite(m1INB, LOW);
   digitalWrite(m2INB, HIGH);
@@ -464,16 +639,17 @@ void rotateRight180(){
   delay(900);
   analogWrite(m2PWM,0.2*255);
   analogWrite(m1PWM,0.2*255);
-  while(m2Count<810){
-    delay(1);
+  while(avgCount<840){
+    avgCount = (m2MovementCount+m1MovementCount)/2;
   }
   analogWrite(m2PWM, 0*255);
   analogWrite(m1PWM, 0*255);
-  m2Count=0;
 }
 
 void rotateRight90(){
-  m2Count=0;
+  m2MovementCount=0;
+  m1MovementCount=0;
+  avgCount=0;
   /// setting wheel direction to rotate robot left
   digitalWrite(m1INB, LOW);
   digitalWrite(m2INB, HIGH);
@@ -485,12 +661,11 @@ void rotateRight90(){
   delay(300);
   analogWrite(m2PWM,0.2*255);
   analogWrite(m1PWM,0.2*255);
-  while(m2Count<405){
-    delay(1);
+  while(avgCount<415){
+    avgCount = (m2MovementCount+m1MovementCount)/2;
   }
   analogWrite(m2PWM, 0*255);
   analogWrite(m1PWM, 0*255);
-  m2Count=0;
 }
 
 void repositionRobotFront(){
@@ -559,8 +734,25 @@ void repositionRobotSide(){
   analogWrite(m2PWM, 0);
   analogWrite(m1PWM, 0);
 }
-
-void realignRobotCentre(){
+void backAwayFromWall(){
+  // get sonar dist
+  sonarReading();
+  if(sonarDist<5){
+    // Setting wheels to move robot forward
+    digitalWrite(m1INB, LOW);
+    digitalWrite(m2INB, LOW);
+    digitalWrite(m1INA, HIGH);
+    digitalWrite(m2INA, HIGH);
+  
+    analogWrite(m2PWM, 0.2*255);
+    analogWrite(m1PWM, 0.2*255);
+    while(sonarDist<5)
+      sonarReading();
+    analogWrite(m2PWM, 0);
+    analogWrite(m1PWM, 0);
+  }
+}
+void realignRobotCentre(){  // might need to use IR instead of UR if too close to the wall unless we calibrate to never move more then 1 grid
   // get sonar dist
   sonarReading();
   if(sonarDist!=4){
@@ -580,7 +772,7 @@ void realignRobotCentre(){
     }
     analogWrite(m2PWM, 0.2*255);
     analogWrite(m1PWM, 0.2*255);
-    while(sonarDist>4)
+    while(sonarDist!=4)
       sonarReading();
     analogWrite(m2PWM, 0);
     analogWrite(m1PWM, 0);

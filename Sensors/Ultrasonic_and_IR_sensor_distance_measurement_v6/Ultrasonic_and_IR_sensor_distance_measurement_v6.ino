@@ -22,18 +22,18 @@ int URPWM = 11; // PWM Output 0-25000US,Every 50US represent 1cm
 int URCOMP= 13; // PWM trigger pin
 long prev_sensor_refresh_time=0;
 long refresh_time_interval = 0;
-int leftSideSensor[samples], leftDiagSensor[samples], rightSideSensor[samples], rightDiagSensor[samples], adjustmentSensor[samples];
+int leftSideSensor[samples], leftDiagSensor[samples], rightSideSensor[samples], rightDiagSensor[samples], adjustmentSensor[samples],leftAdjustmentSensor[samples];
 int left[median_size], leftDiag[median_size], right[median_size], rightDiag[median_size], adjustment[median_size];
-int leftSideSensorMedian=0, leftDiagSensorMedian=0, rightDiagSensorMedian=0, rightSideSensorMedian=0, adjustmentSensorMedian=0;
+int leftSideSensorMedian=0, leftDiagSensorMedian=0, rightDiagSensorMedian=0, rightSideSensorMedian=0, adjustmentSensorMedian=0, leftAdjustmentSensorMedian=0;
 static int sonarDist=0;
 int leftMin=9999, leftDiagMin=9999, rightMin=9999, rightDiagMin=9999;
 int leftMax=0, leftDiagMax=0, rightMax=0, rightDiagMax=0;
-int obstaclePositions[6];
+int obstaclePositions[7];
 
 void setup() 
 {
   //Serial initialization
-  Serial.begin(115200);
+  Serial.begin(9600);
   
   for(int i=0; i<samples; i++){
     leftSideSensor[i]=999;
@@ -117,13 +117,23 @@ void obstacleIdentification(){
     obstaclePositions[5] = 1;
   else 
     obstaclePositions[5] = 0;
+  // check adjustment sensor distance
+  if(leftAdjustmentSensorMedian>=17 && leftAdjustmentSensorMedian<=20)
+    obstaclePositions[6] = 3;
+  else if(leftAdjustmentSensorMedian>=9 && leftAdjustmentSensorMedian<=16)
+    obstaclePositions[6] = 2;
+  else if(leftAdjustmentSensorMedian<9 && leftAdjustmentSensorMedian>0)
+    obstaclePositions[6] = 1;
+  else 
+    obstaclePositions[6] = 0;
   Serial.print("pc:");
   Serial.print(obstaclePositions[0]);
   Serial.print(obstaclePositions[1]);
   Serial.print(obstaclePositions[2]);
   Serial.print(obstaclePositions[3]);
   Serial.print(obstaclePositions[4]);
-  Serial.println(obstaclePositions[5]);
+  Serial.print(obstaclePositions[5]);
+  Serial.println(obstaclePositions[6]);
   Serial.println("----");
 }
 
@@ -142,7 +152,9 @@ void getSensorReadings(){
     Serial.print(" ");
     Serial.print(rightSideSensorMedian);
     Serial.print(" ");
-    Serial.println(adjustmentSensorMedian);
+    Serial.print(adjustmentSensorMedian);
+    Serial.print(" ");
+    Serial.println(leftAdjustmentSensorMedian);
     prev_sensor_refresh_time = current_time;
   }
 }
@@ -225,6 +237,10 @@ int adjustmentSensorReading(){
  return ((4400/(analogRead(0)+5))-3); 
 }
 
+int leftAdjustmentSensorReading(){
+ return ((4600/(analogRead(1)+5))-3); 
+}
+
 void computeMedian(){
   static int sideIndex=0;
   static int diagIndex=0;
@@ -234,6 +250,7 @@ void computeMedian(){
   rightSideSensor[sideIndex] = rightSideSensorReading();
   rightDiagSensor[diagIndex] = rightDiagSensorReading();
   adjustmentSensor[diagIndex] = adjustmentSensorReading();
+  leftAdjustmentSensor[diagIndex] = leftAdjustmentSensorReading();
   // sort data     
   insertionSort();
   
@@ -242,6 +259,7 @@ void computeMedian(){
   rightSideSensorMedian = rightSideSensor[samples/2];
   rightDiagSensorMedian = rightDiagSensor[samples/2];
   adjustmentSensorMedian = adjustmentSensor[samples/2];
+  leftAdjustmentSensorMedian = leftAdjustmentSensor[samples/2];
   
   sideIndex = (sideIndex+1)%samples;
   diagIndex = (diagIndex+1)%samples;
@@ -274,6 +292,11 @@ void insertionSort(){
         int temp = adjustmentSensor[j];
         adjustmentSensor[j] = adjustmentSensor[j-1];
         adjustmentSensor[j-1] = temp;
+      }
+      if(leftAdjustmentSensor[j]<leftAdjustmentSensor[j-1]){
+        int temp = leftAdjustmentSensor[j];
+        leftAdjustmentSensor[j] = leftAdjustmentSensor[j-1];
+        leftAdjustmentSensor[j-1] = temp;
       }
     }
   } 
